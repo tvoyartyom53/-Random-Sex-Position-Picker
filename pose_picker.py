@@ -1,154 +1,88 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-🎲 Random Sex Position Picker
-Зависимости: pip install requests beautifulsoup4 Pillow
-Запуск:      python pose_picker.py
-"""
-
 import random
-import traceback
+import sys
 from io import BytesIO
 from urllib.parse import urljoin
 
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import messagebox, ttk  # ttk для выпадающего списка
 
-# ---------- зависимости ----------
-_missing = []
 try:
     import requests
-except ImportError:
-    _missing.append("requests")
-try:
     from bs4 import BeautifulSoup
 except ImportError:
-    _missing.append("beautifulsoup4")
+    sys.exit("Установите зависимости: pip install requests beautifulsoup4 Pillow")
+
 try:
     from PIL import Image, ImageTk
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
-    _missing.append("Pillow")
 
-# ---------- настройки ----------
-SOURCE_URL = "https://medow.club/pozy/vid-seksa/vaginalnyj-seks/"
+# ---------- НАСТРОЙКИ КАТЕГОРИЙ ----------
+# Ключ - то, что видит пользователь, значение - URL для парсинга
+CATEGORIES = {
+    "Вагинальный секс": "https://medow.club/pozy/vid-seksa/vaginalnyj-seks",
+    "Анальный секс": "https://medow.club/pozy/vid-seksa/analnyj-seks",
+    "Оральный секс": "https://medow.club/pozy/vid-seksa/oralnyj-seks",
+    "Поза 69": "https://medow.club/pozy/vid-seksa/poza-69",
+    "Минет": "https://medow.club/pozy/vid-seksa/minet",
+    "Кунилингус": "https://medow.club/pozy/vid-seksa/kunilingus",
+}
 BASE_URL = "https://medow.club"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
                   "Chrome/120.0 Safari/537.36",
     "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Referer": "https://medow.club/",
 }
 
-
-# ---------- парсер с несколькими стратегиями ----------
-def fetch_poses(log):
-    """Пробует несколько стратегий парсинга, пока не найдёт позы."""
-    log(f"GET {SOURCE_URL}")
-    session = requests.Session()
-    session.headers.update(HEADERS)
-
-    r = session.get(SOURCE_URL, timeout=20)
-    log(f"HTTP {r.status_code}, {len(r.text)} байт")
-    r.raise_for_status()
-    if r.status_code != 200:
-        raise RuntimeError(f"Сайт вернул HTTP {r.status_code}")
+# ---------- ПАРСЕР ----------
+def fetch_poses(url):
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        r.raise_for_status()
+    except Exception as e:
+        raise RuntimeError(f"Ошибка сети: {e}")
 
     soup = BeautifulSoup(r.text, "html.parser")
-    log(f"<title>: {soup.title.string.strip() if soup.title and soup.title.string else 'НЕТ'}")
-
-    strategies = [
-        ("div.post-card",        "div.post-card__title a",
-                                 "div.post-card__thumbnail img",
-                                 "div.post-card__description"),
-        ("article",              "h2 a, h3 a, a[href*='/pozy/']",
-                                 "img",
-                                 "p"),
-        (".card, .item, .entry", "a[href*='/pozy/']",
-                                 "img",
-                                 "p"),
-    ]
-
-    for container_sel, title_sel, img_sel, desc_sel in strategies:
-        cards = soup.select(container_sel)
-        log(f"Стратегия '{container_sel}': найдено {len(cards)} блоков")
-        poses, seen = [], set()
-
-        for card in cards:
-            a = card.select_one(title_sel) if title_sel else None
-            if not a:
-                continue
-            href = a.get("href", "")
-            if "/pozy/" not in href or href.rstrip("/") == SOURCE_URL.rstrip("/"):
-                continue
-            title = a.get_text(strip=True)
-            if not title or len(title) < 3 or title in seen:
-                continue
-            seen.add(title)
-
-            img_url = None
-            img_tag = card.select_one(img_sel) if img_sel else None
-            if img_tag:
-                src = (img_tag.get("src") or img_tag.get("data-src")
-                       or img_tag.get("data-lazy-src") or img_tag.get("data-original"))
-                if src and not src.startswith("data:"):
-                    img_url = urljoin(BASE_URL, src)
-
-            desc = ""
-            dtag = card.select_one(desc_sel) if desc_sel else None
-            if dtag:
-                desc = dtag.get_text(strip=True)
-
-            poses.append({
-                "title": title,
-                "description": desc,
-                "image_url": img_url,
-                "page_url": urljoin(BASE_URL, href),
-            })
-
-        if poses:
-            log(f"✅ Стратегия сработала, извлечено {len(poses)} поз")
-            return poses
-
-    # Последняя стратегия — вообще без контейнера, только ссылки
-    log("Fallback: собираю все ссылки с /pozy/ на странице")
     poses, seen = [], set()
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if "/pozy/" not in href or href.rstrip("/") == SOURCE_URL.rstrip("/"):
-            continue
-        title = a.get_text(strip=True)
-        if not title or len(title) < 3 or title in seen:
-            continue
+
+    candidates = soup.select("article, .post, .entry, .position, .item, .card")
+    if not candidates:
+        candidates = soup.find_all("a", href=lambda h: h and "/pozy/" in h)
+
+    for block in candidates:
+        link_tag = block if block.name == "a" else block.find("a", href=True)
+        if not link_tag: continue
+
+        href = link_tag.get("href", "")
+        if "/pozy/" not in href: continue
+
+        title = link_tag.get_text(strip=True)
+        if not title or len(title) < 3 or title in seen: continue
         seen.add(title)
 
-        img_tag = a.find("img") or (a.parent.find("img") if a.parent else None)
+        desc_tag = block.find("p") if block.name != "a" else None
+        desc = desc_tag.get_text(strip=True) if desc_tag else ""
+
+        img_tag = block.find("img") if block.name != "a" else None
         img_url = None
         if img_tag:
-            src = (img_tag.get("src") or img_tag.get("data-src")
-                   or img_tag.get("data-lazy-src"))
-            if src and not src.startswith("data:"):
+            src = (img_tag.get("src") or img_tag.get("data-src") or 
+                   img_tag.get("data-lazy-src") or img_tag.get("data-original"))
+            if src:
                 img_url = urljoin(BASE_URL, src)
 
         poses.append({
             "title": title,
-            "description": "",
+            "description": desc,
             "image_url": img_url,
             "page_url": urljoin(BASE_URL, href),
         })
 
-    log(f"Найдено по ссылкам: {len(poses)}")
     if not poses:
-        raise RuntimeError(
-            "Не удалось найти ни одной позы на странице. "
-            "Сайт, скорее всего, рендерит контент через JavaScript — "
-            "нужен Playwright/Selenium."
-        )
+        raise RuntimeError("Не удалось найти позы. Возможно, сайт требует JS-рендеринг.")
     return poses
-
 
 # ---------- GUI ----------
 class PoseApp:
@@ -157,18 +91,32 @@ class PoseApp:
         self.poses = []
         self.image_cache = {}
         self._photo_ref = None
+        self.current_category_url = CATEGORIES["Вагинальный секс"]
 
         root.title("Случайная поза")
-        root.geometry("620x840")
-        root.minsize(460, 620)
+        root.geometry("580x820")  # Чуть выше, чтобы влез комбобокс
+        root.minsize(400, 500)
         root.configure(bg="#1a1a1a")
 
-        tk.Label(root, text="🎲 Случайная поза",
-                 font=("Segoe UI", 22, "bold"),
-                 bg="#1a1a1a", fg="#ffffff").pack(pady=(20, 5))
+        # --- Выбор категории ---
+        top_frame = tk.Frame(root, bg="#1a1a1a")
+        top_frame.pack(pady=(20, 5), fill="x", padx=25)
+        
+        tk.Label(top_frame, text="Категория:", font=("Segoe UI", 12), 
+                 bg="#1a1a1a", fg="#ffffff").pack(side="left")
+        
+        self.category_var = tk.StringVar(value="Вагинальный секс")
+        self.category_combo = ttk.Combobox(
+            top_frame, textvariable=self.category_var, 
+            values=list(CATEGORIES.keys()), state="readonly", 
+            font=("Segoe UI", 12), width=25
+        )
+        self.category_combo.pack(side="left", padx=10)
+        self.category_combo.bind("<<ComboboxSelected>>", self.on_category_change)
 
+        # --- Кнопка ---
         self.btn = tk.Button(
-            root, text="Загрузка...",
+            root, text="Показать случайную позу",
             font=("Segoe UI", 14, "bold"),
             bg="#e50914", fg="white",
             activebackground="#ff2b36", activeforeground="white",
@@ -177,88 +125,50 @@ class PoseApp:
         )
         self.btn.pack(pady=15)
 
-        self.image_label = tk.Label(root, text="[картинка]",
-                                    bg="#1a1a1a", fg="#777",
-                                    font=("Segoe UI", 10))
+        # --- Картинка и текст ---
+        self.image_label = tk.Label(root, text="[картинка]", bg="#1a1a1a", fg="#777")
         self.image_label.pack(pady=10)
-
-        self.title_label = tk.Label(root, text="",
-                                    font=("Segoe UI", 18, "bold"),
-                                    wraplength=560, bg="#1a1a1a", fg="#ffffff")
+        self.title_label = tk.Label(root, text="", font=("Segoe UI", 18, "bold"),
+                                    wraplength=520, bg="#1a1a1a", fg="#ffffff")
         self.title_label.pack(pady=(10, 5))
-
-        self.desc_label = tk.Label(
-            root, text="Загрузка поз с сайта...",
-            font=("Segoe UI", 12), wraplength=560, justify="left",
-            bg="#1a1a1a", fg="#dcdcdc",
-        )
+        self.desc_label = tk.Label(root, text="Загрузка...", font=("Segoe UI", 12),
+                                   wraplength=520, justify="left", bg="#1a1a1a", fg="#dcdcdc")
         self.desc_label.pack(pady=10, padx=25)
+        
+        self.status = tk.Label(root, text="", font=("Segoe UI", 9), bg="#1a1a1a", fg="#666")
+        self.status.pack(side="bottom", pady=10)
 
-        self.log_box = scrolledtext.ScrolledText(
-            root, height=6, font=("Consolas", 9),
-            bg="#0f0f0f", fg="#9f9f9f", relief="flat",
-        )
-        self.log_box.pack(fill="x", padx=15, pady=(10, 5))
+        # Первичная загрузка
+        self.load_poses()
 
-        if _missing:
-            self.log(f"❌ Не установлены модули: {', '.join(_missing)}")
-            self.desc_label.config(
-                text=f"Не хватает зависимостей: {', '.join(_missing)}\n\n"
-                     f"Откройте терминал и выполните:\n"
-                     f"pip install requests beautifulsoup4 Pillow",
-                fg="#e50914",
-            )
-            self.btn.config(text="Выход", state="normal",
-                            command=self.root.destroy)
-            return
-
-        root.after(200, self.load_poses)
-
-    def log(self, msg):
-        try:
-            print(msg)
-            self.log_box.insert("end", msg + "\n")
-            self.log_box.see("end")
-            self.root.update_idletasks()
-        except Exception:
-            pass
+    def on_category_change(self, event=None):
+        """Вызывается при смене категории в выпадающем списке."""
+        category_name = self.category_var.get()
+        self.current_category_url = CATEGORIES[category_name]
+        self.load_poses()
 
     def load_poses(self):
+        self.btn.config(state="disabled")
+        self.desc_label.config(text="Загрузка данных с сайта...")
+        self.status.config(text=f"Загрузка: {self.category_var.get()}", fg="#666")
+        self.root.update_idletasks()
+
         try:
-            self.log("--- Загрузка ---")
-            self.poses = fetch_poses(self.log)
+            self.poses = fetch_poses(self.current_category_url)
+            self.status.config(text=f"Источник: medow.club · {len(self.poses)} поз", fg="#666")
+            self.desc_label.config(text="Нажмите кнопку, чтобы получить случайную позу.")
+            self.btn.config(text="Показать случайную позу", state="normal", command=self.show_random)
         except Exception as e:
-            self.log(f"❌ ОШИБКА: {e}")
-            self.log(traceback.format_exc())
-            self.desc_label.config(
-                text=f"Не удалось загрузить позы:\n\n{e}",
-                fg="#e50914",
-            )
-            self.btn.config(text="Повторить загрузку", state="normal",
-                            command=self.retry_load)
-            return
-
-        self.desc_label.config(
-            text=f"Загружено {len(self.poses)} поз.\n"
-                 f"Нажмите кнопку, чтобы получить случайную.",
-            fg="#dcdcdc",
-        )
-        self.btn.config(text="Показать случайную позу", state="normal",
-                        command=self.show_random)
-
-    def retry_load(self):
-        self.btn.config(state="disabled", text="Загрузка...")
-        self.root.after(100, self.load_poses)
+            self.status.config(text="Ошибка загрузки", fg="#e50914")
+            self.desc_label.config(text=f"Не удалось загрузить позы:\n\n{e}")
+            self.btn.config(text="Повторить загрузку", state="normal", command=self.load_poses)
 
     def show_random(self):
-        if not self.poses:
-            return
+        if not self.poses: return
         pose = random.choice(self.poses)
         self.title_label.config(text=pose["title"])
-        self.desc_label.config(
-            text=pose.get("description") or "Описание отсутствует.",
-            fg="#dcdcdc",
-        )
+        self.desc_label.config(text=pose.get("description") or "Описание отсутствует.")
+        
         url = pose.get("image_url")
         if url and HAS_PIL:
             self._load_image(url)
@@ -268,9 +178,8 @@ class PoseApp:
 
     def _load_image(self, url):
         if url in self.image_cache:
-            photo = self.image_cache[url]
-            self.image_label.config(image=photo, text="")
-            self._photo_ref = photo
+            self.image_label.config(image=self.image_cache[url], text="")
+            self._photo_ref = self.image_cache[url]
             return
         self.image_label.config(image="", text="[загрузка...]")
         self.root.update_idletasks()
@@ -278,23 +187,16 @@ class PoseApp:
             r = requests.get(url, headers=HEADERS, timeout=10)
             r.raise_for_status()
             img = Image.open(BytesIO(r.content))
-            img.thumbnail((540, 350))
+            img.thumbnail((500, 340))
             photo = ImageTk.PhotoImage(img)
             self.image_cache[url] = photo
             self.image_label.config(image=photo, text="")
             self._photo_ref = photo
-        except Exception as e:
-            self.log(f"⚠ картинка не загрузилась: {e}")
+        except Exception:
             self.image_label.config(image="", text="[не удалось загрузить картинку]")
             self._photo_ref = None
 
-
-# ---------- main ----------
-def main():
-    root = tk.Tk()
-    PoseApp(root)
-    root.mainloop()
-
-
 if __name__ == "__main__":
-    main()
+    root = tk.Tk()
+    app = PoseApp(root)
+    root.mainloop()
