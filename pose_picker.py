@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 🎲 Random Sex Position Picker
-Показывает случайную позу с сайта medow.club.
 Зависимости: pip install requests beautifulsoup4 Pillow
 Запуск:      python pose_picker.py
 """
@@ -15,7 +14,7 @@ from urllib.parse import urljoin
 import tkinter as tk
 from tkinter import scrolledtext
 
-# ---------- Проверка зависимостей ----------
+# ---------- зависимости ----------
 _missing = []
 try:
     import requests
@@ -32,7 +31,7 @@ except ImportError:
     HAS_PIL = False
     _missing.append("Pillow")
 
-# ---------- Настройки ----------
+# ---------- настройки ----------
 SOURCE_URL = "https://medow.club/pozy/vid-seksa/vaginalnyj-seks/"
 BASE_URL = "https://medow.club"
 HEADERS = {
@@ -41,62 +40,115 @@ HEADERS = {
                   "Chrome/120.0 Safari/537.36",
     "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://medow.club/",
 }
 
-# ---------- Парсер (ТОЧНЫЕ СЕЛЕКТОРЫ) ----------
+
+# ---------- парсер с несколькими стратегиями ----------
 def fetch_poses(log):
-    """Собирает позы с сайта, используя точные CSS-классы."""
-    log(f"Запрос: {SOURCE_URL}")
+    """Пробует несколько стратегий парсинга, пока не найдёт позы."""
+    log(f"GET {SOURCE_URL}")
     session = requests.Session()
     session.headers.update(HEADERS)
+
     r = session.get(SOURCE_URL, timeout=20)
-    log(f"HTTP статус: {r.status_code}, размер: {len(r.text)} байт")
+    log(f"HTTP {r.status_code}, {len(r.text)} байт")
     r.raise_for_status()
+    if r.status_code != 200:
+        raise RuntimeError(f"Сайт вернул HTTP {r.status_code}")
 
     soup = BeautifulSoup(r.text, "html.parser")
-    log(f"Заголовок страницы: {soup.title.string if soup.title else 'НЕТ'}")
+    log(f"<title>: {soup.title.string.strip() if soup.title and soup.title.string else 'НЕТ'}")
 
-    poses = []
-    # Находим все карточки с позами
-    cards = soup.select("div.post-card")
-    log(f"Найдено карточек (div.post-card): {len(cards)}")
+    strategies = [
+        ("div.post-card",        "div.post-card__title a",
+                                 "div.post-card__thumbnail img",
+                                 "div.post-card__description"),
+        ("article",              "h2 a, h3 a, a[href*='/pozy/']",
+                                 "img",
+                                 "p"),
+        (".card, .item, .entry", "a[href*='/pozy/']",
+                                 "img",
+                                 "p"),
+    ]
 
-    if not cards:
-        raise RuntimeError(
-            "На странице не найдено ни одной карточки с позой (div.post-card). "
-            "Возможно, сайт изменил вёрстку."
-        )
+    for container_sel, title_sel, img_sel, desc_sel in strategies:
+        cards = soup.select(container_sel)
+        log(f"Стратегия '{container_sel}': найдено {len(cards)} блоков")
+        poses, seen = [], set()
 
-    for card in cards:
-        # 1. Заголовок и ссылка на страницу позы
-        title_div = card.select_one("div.post-card__title")
-        link_tag = title_div.find("a") if title_div else None
-        if not link_tag:
+        for card in cards:
+            a = card.select_one(title_sel) if title_sel else None
+            if not a:
+                continue
+            href = a.get("href", "")
+            if "/pozy/" not in href or href.rstrip("/") == SOURCE_URL.rstrip("/"):
+                continue
+            title = a.get_text(strip=True)
+            if not title or len(title) < 3 or title in seen:
+                continue
+            seen.add(title)
+
+            img_url = None
+            img_tag = card.select_one(img_sel) if img_sel else None
+            if img_tag:
+                src = (img_tag.get("src") or img_tag.get("data-src")
+                       or img_tag.get("data-lazy-src") or img_tag.get("data-original"))
+                if src and not src.startswith("data:"):
+                    img_url = urljoin(BASE_URL, src)
+
+            desc = ""
+            dtag = card.select_one(desc_sel) if desc_sel else None
+            if dtag:
+                desc = dtag.get_text(strip=True)
+
+            poses.append({
+                "title": title,
+                "description": desc,
+                "image_url": img_url,
+                "page_url": urljoin(BASE_URL, href),
+            })
+
+        if poses:
+            log(f"✅ Стратегия сработала, извлечено {len(poses)} поз")
+            return poses
+
+    # Последняя стратегия — вообще без контейнера, только ссылки
+    log("Fallback: собираю все ссылки с /pozy/ на странице")
+    poses, seen = [], set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/pozy/" not in href or href.rstrip("/") == SOURCE_URL.rstrip("/"):
             continue
-        title = link_tag.get_text(strip=True)
-        page_url = urljoin(BASE_URL, link_tag.get("href", ""))
+        title = a.get_text(strip=True)
+        if not title or len(title) < 3 or title in seen:
+            continue
+        seen.add(title)
 
-        # 2. Картинка
-        img_tag = card.select_one("div.post-card__thumbnail img")
+        img_tag = a.find("img") or (a.parent.find("img") if a.parent else None)
         img_url = None
         if img_tag:
-            src = img_tag.get("src")
-            if src:
+            src = (img_tag.get("src") or img_tag.get("data-src")
+                   or img_tag.get("data-lazy-src"))
+            if src and not src.startswith("data:"):
                 img_url = urljoin(BASE_URL, src)
-
-        # 3. Описание
-        desc_div = card.select_one("div.post-card__description")
-        description = desc_div.get_text(strip=True) if desc_div else ""
 
         poses.append({
             "title": title,
-            "description": description,
+            "description": "",
             "image_url": img_url,
-            "page_url": page_url,
+            "page_url": urljoin(BASE_URL, href),
         })
 
-    log(f"Успешно извлечено поз: {len(poses)}")
+    log(f"Найдено по ссылкам: {len(poses)}")
+    if not poses:
+        raise RuntimeError(
+            "Не удалось найти ни одной позы на странице. "
+            "Сайт, скорее всего, рендерит контент через JavaScript — "
+            "нужен Playwright/Selenium."
+        )
     return poses
+
 
 # ---------- GUI ----------
 class PoseApp:
@@ -107,8 +159,8 @@ class PoseApp:
         self._photo_ref = None
 
         root.title("Случайная поза")
-        root.geometry("600x820")
-        root.minsize(450, 600)
+        root.geometry("620x840")
+        root.minsize(460, 620)
         root.configure(bg="#1a1a1a")
 
         tk.Label(root, text="🎲 Случайная поза",
@@ -132,12 +184,12 @@ class PoseApp:
 
         self.title_label = tk.Label(root, text="",
                                     font=("Segoe UI", 18, "bold"),
-                                    wraplength=540, bg="#1a1a1a", fg="#ffffff")
+                                    wraplength=560, bg="#1a1a1a", fg="#ffffff")
         self.title_label.pack(pady=(10, 5))
 
         self.desc_label = tk.Label(
             root, text="Загрузка поз с сайта...",
-            font=("Segoe UI", 12), wraplength=540, justify="left",
+            font=("Segoe UI", 12), wraplength=560, justify="left",
             bg="#1a1a1a", fg="#dcdcdc",
         )
         self.desc_label.pack(pady=10, padx=25)
@@ -150,10 +202,8 @@ class PoseApp:
 
         if _missing:
             self.log(f"❌ Не установлены модули: {', '.join(_missing)}")
-            self.log("Выполните в терминале:")
-            self.log("    pip install requests beautifulsoup4 Pillow")
             self.desc_label.config(
-                text=f"Не хватает зависимостей: {', '.join(_missing)}\n"
+                text=f"Не хватает зависимостей: {', '.join(_missing)}\n\n"
                      f"Откройте терминал и выполните:\n"
                      f"pip install requests beautifulsoup4 Pillow",
                 fg="#e50914",
@@ -165,10 +215,13 @@ class PoseApp:
         root.after(200, self.load_poses)
 
     def log(self, msg):
-        print(msg)
-        self.log_box.insert("end", msg + "\n")
-        self.log_box.see("end")
-        self.root.update_idletasks()
+        try:
+            print(msg)
+            self.log_box.insert("end", msg + "\n")
+            self.log_box.see("end")
+            self.root.update_idletasks()
+        except Exception:
+            pass
 
     def load_poses(self):
         try:
@@ -185,9 +238,9 @@ class PoseApp:
                             command=self.retry_load)
             return
 
-        self.log(f"✅ Успешно загружено {len(self.poses)} поз")
         self.desc_label.config(
-            text="Нажмите кнопку, чтобы получить случайную позу.",
+            text=f"Загружено {len(self.poses)} поз.\n"
+                 f"Нажмите кнопку, чтобы получить случайную.",
             fg="#dcdcdc",
         )
         self.btn.config(text="Показать случайную позу", state="normal",
@@ -225,7 +278,7 @@ class PoseApp:
             r = requests.get(url, headers=HEADERS, timeout=10)
             r.raise_for_status()
             img = Image.open(BytesIO(r.content))
-            img.thumbnail((520, 340))
+            img.thumbnail((540, 350))
             photo = ImageTk.PhotoImage(img)
             self.image_cache[url] = photo
             self.image_label.config(image=photo, text="")
@@ -235,11 +288,13 @@ class PoseApp:
             self.image_label.config(image="", text="[не удалось загрузить картинку]")
             self._photo_ref = None
 
+
 # ---------- main ----------
 def main():
     root = tk.Tk()
     PoseApp(root)
     root.mainloop()
+
 
 if __name__ == "__main__":
     main()
