@@ -15,18 +15,23 @@ CATEGORIES = {
 }
 
 BASE_URL = "https://medow.club"
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Referer": BASE_URL  # Важно для обхода защиты картинок
+}
 
 all_poses = []
 seen_titles = set()
 
 print("Начинаем парсинг...")
 for cat_name, cat_url in CATEGORIES.items():
+    print(f"Смотрим категорию: {cat_name}")
     try:
         r = requests.get(cat_url, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
         
-        # Ищем все ссылки на позы
+        # Ищем ВСЕ ссылки, ведущие на позы
         links = soup.find_all("a", href=lambda h: h and "/pozy/" in h)
         
         for link in links:
@@ -36,29 +41,54 @@ for cat_name, cat_url in CATEGORIES.items():
             
             seen_titles.add(title)
             
-            # Ищем картинку рядом со ссылкой
+            # Ищем картинку: внутри ссылки, или в её родительском блоке
             img_tag = link.find("img") or link.parent.find("img")
-            base64_img = ""
             
+            # Если не нашли, ищем на 2 уровня выше
+            if not img_tag:
+                container = link.find_parent(['article', 'div'])
+                if container:
+                    img_tag = container.find("img")
+            
+            base64_img = ""
             if img_tag:
-                img_src = img_tag.get("src") or img_tag.get("data-src") or img_tag.get("data-lazy-src")
+                # Пытаемся достать ссылку из разных атрибутов (lazy load)
+                img_src = (img_tag.get("src") or 
+                           img_tag.get("data-src") or 
+                           img_tag.get("data-lazy-src") or 
+                           img_tag.get("srcset"))
+                
                 if img_src:
+                    # Если это srcset, берем первую ссылку
+                    if "," in img_src: img_src = img_src.split(",")[0].split(" ")[0]
+                    
                     img_url = urljoin(BASE_URL, img_src)
                     try:
                         img_data = requests.get(img_url, headers=HEADERS, timeout=10).content
-                        b64 = base64.b64encode(img_data).decode('utf-8')
-                        base64_img = f"data:image/jpeg;base64,{b64}"
-                    except: pass
+                        # Проверяем, что это реально картинка, а не заглушка
+                        if len(img_data) > 1000:  
+                            b64 = base64.b64encode(img_data).decode('utf-8')
+                            base64_img = f"data:image/jpeg;base64,{b64}"
+                    except Exception as e:
+                        print(f"  Ошибка загрузки картинки: {img_url}")
+
+            # Описание (если есть)
+            desc_tag = link.parent.find("p") if link.parent else None
+            desc = desc_tag.get_text(strip=True) if desc_tag else "Описание отсутствует. Нажмите кнопку еще раз, чтобы увидеть другую позу."
 
             all_poses.append({
                 "category": cat_name,
                 "title": title,
-                "description": "Нажмите кнопку еще раз, чтобы увидеть другую позу.",
+                "description": desc,
                 "image": base64_img
             })
-            print(f"Скачано: {title}")
+            print(f"  + {title} (картинка: {'ЕСТЬ' if base64_img else 'НЕТ'})")
+            
+        time.sleep(1)
     except Exception as e:
-        print(f"Ошибка в {cat_name}: {e}")
+        print(f"  Критическая ошибка в {cat_name}: {e}")
+
+print(f"\nВсего собрано поз: {len(all_poses)}")
 
 # Генерация HTML
 html = f"""<!DOCTYPE html>
@@ -68,13 +98,14 @@ html = f"""<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Random Sex Position Picker</title>
     <style>
-        body {{ background-color: #1a1a1a; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; }}
-        .controls {{ display: flex; gap: 10px; margin-bottom: 20px; }}
+        body {{ background-color: #1a1a1a; color: #fff; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; }}
+        .controls {{ display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; justify-content: center; }}
         select {{ padding: 10px; font-size: 16px; background: #333; color: white; border: none; border-radius: 5px; }}
         button {{ background-color: #e50914; color: white; border: none; padding: 12px 24px; font-size: 18px; font-weight: bold; border-radius: 5px; cursor: pointer; }}
-        .card {{ background: #2a2a2a; border-radius: 10px; padding: 20px; max-width: 600px; width: 100%; text-align: center; display: none; }}
-        .card img {{ max-width: 100%; max-height: 500px; border-radius: 8px; margin-bottom: 15px; }}
-        h2 {{ color: #e50914; }}
+        .card {{ background: #2a2a2a; border-radius: 10px; padding: 20px; max-width: 600px; width: 100%; text-align: center; display: none; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }}
+        .card img {{ max-width: 100%; max-height: 500px; border-radius: 8px; margin-bottom: 15px; object-fit: cover; }}
+        h2 {{ color: #e50914; margin-top: 0; }}
+        .placeholder {{ width: 100%; height: 200px; background: #333; display: flex; align-items: center; justify-content: center; border-radius: 8px; margin-bottom: 15px; color: #777; font-size: 14px; }}
     </style>
 </head>
 <body>
@@ -84,7 +115,7 @@ html = f"""<!DOCTYPE html>
         <button id="randomBtn">Показать позу</button>
     </div>
     <div id="poseCard" class="card">
-        <img id="poseImage" src="" style="display:none;">
+        <div id="imageContainer"></div>
         <h2 id="poseTitle"></h2>
         <p id="poseDesc"></p>
     </div>
@@ -110,9 +141,12 @@ html = f"""<!DOCTYPE html>
                 document.getElementById("poseTitle").textContent = pose.title;
                 document.getElementById("poseDesc").textContent = pose.description;
                 
-                let img = document.getElementById("poseImage");
-                if (pose.image) {{ img.src = pose.image; img.style.display = "block"; }}
-                else {{ img.style.display = "none"; }}
+                let imgContainer = document.getElementById("imageContainer");
+                if (pose.image) {{
+                    imgContainer.innerHTML = `<img src="${{pose.image}}" alt="Поза">`;
+                }} else {{
+                    imgContainer.innerHTML = `<div class="placeholder">Картинка не найдена (сайт заблокировал загрузку)</div>`;
+                }}
             }});
         }});
     </script>
@@ -121,4 +155,4 @@ html = f"""<!DOCTYPE html>
 
 with open("index.html", "w", encoding="utf-8") as f:
     f.write(html)
-print("Готово!")
+print("Готово! index.html сгенерирован.")
