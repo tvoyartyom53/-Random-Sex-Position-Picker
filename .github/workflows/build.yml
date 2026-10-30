@@ -1,0 +1,34 @@
+name: Build Offline App
+
+on:
+  workflow_dispatch: # Позволяет запустить вручную
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4
+        
+      - name: Run script to generate HTML
+        run: python generate.py
+        
+      - name: Commit and Push index.html
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git add index.html
+          git commit -m "Auto-generated index.html with all images" || exit 0
+          git push
