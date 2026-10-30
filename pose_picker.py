@@ -4,7 +4,7 @@
 🎲 Random Sex Position Picker
 ==============================
 Показывает случайную позу из категории "вагинальный секс"
-(источник: https://medow.club/pozy/vid-seksa/vaginalnyj-seks).
+(источник: https://medow.club/pozy/vid-seksa/vaginalnyj-seks/).
 
 Зависимости:
     pip install requests beautifulsoup4 Pillow
@@ -19,7 +19,6 @@ from io import BytesIO
 from urllib.parse import urljoin
 
 import tkinter as tk
-from tkinter import messagebox
 
 try:
     import requests
@@ -34,7 +33,7 @@ except ImportError:
     HAS_PIL = False
 
 # ---------- настройки ----------
-SOURCE_URL = "https://medow.club/pozy/vid-seksa/vaginalnyj-seks"
+SOURCE_URL = "https://medow.club/pozy/vid-seksa/vaginalnyj-seks/"  # со слэшем в конце
 BASE_URL = "https://medow.club"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
